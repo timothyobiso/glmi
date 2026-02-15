@@ -514,7 +514,8 @@ def compute_accumulation_curve(abs_results: list[dict]) -> dict:
 
 # ── Main analysis ─────────────────────────────────────────────────────────────
 
-def run_analysis(agg: str = "mean", target_layers: list[int] | None = None):
+def run_analysis(agg: str = "mean", target_layers: list[int] | None = None,
+                 model_filter: str | None = None):
     stimuli_path = config.STIMULI / "stimuli_final.jsonl"
     controls_path = config.CONTROLS / "controls.jsonl"
     distractor_path = config.CONTROLS / "distractor_map.json"
@@ -528,10 +529,16 @@ def run_analysis(agg: str = "mean", target_layers: list[int] | None = None):
 
     print(f"Loaded {len(stimuli)} stimuli + {len(controls)} controls")
 
+    models = config.EXPERIMENT_MODELS
+    if model_filter:
+        models = [m for m in models if model_filter in m]
+        if not models:
+            models = [model_filter]
+
     # Collect per-model results at the analysis layer for H5
     h5_model_results = {}
 
-    for model_name in config.EXPERIMENT_MODELS:
+    for model_name in models:
         model_slug = model_name.replace("/", "--")
         print(f"\n{'='*60}")
         print(f"Analyzing {model_name}")
@@ -664,10 +671,12 @@ def main():
     parser.add_argument("--agg", choices=["mean", "first", "last"], default="mean")
     parser.add_argument("--layers", type=str, default=None,
                         help="Comma-separated layer indices (default: sampled)")
+    parser.add_argument("--model", type=str, default=None,
+                        help="Run only this model (default: all EXPERIMENT_MODELS)")
     args = parser.parse_args()
 
     layers = [int(x) for x in args.layers.split(",")] if args.layers else None
-    run_analysis(agg=args.agg, target_layers=layers)
+    run_analysis(agg=args.agg, target_layers=layers, model_filter=args.model)
 
 
 if __name__ == "__main__":

@@ -325,14 +325,31 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                     "sentences": flat_sentences,
                 })
 
-                # Swapped roles: fillers placed in wrong qualia templates
-                # e.g., telic filler in constitutive template, etc.
+                # Swapped roles: each filler placed in the WRONG qualia
+                # template. Tests whether GL frame matters beyond content.
+                # e.g., telic filler → constitutive template,
+                #        agentive filler → formal template, etc.
+                SWAP_TEMPLATES = {
+                    "telic": "She used the {nonce} to {filler}.",
+                    "agentive": "The {nonce} was made by {filler}.",
+                    "constitutive": "The {nonce} is made of {filler}.",
+                    "formal": "The {nonce} is a type of {filler}.",
+                }
                 role_list = list(ROLES)
-                shifted = role_list[1:] + role_list[:1]  # rotate by 1
+                shifted = role_list[1:] + role_list[:1]  # rotate fillers by 1
                 swapped_sentences = []
-                for orig_role, wrong_role in zip(role_list, shifted):
-                    wrong_sent = role_sentences[wrong_role][0]["naturalized"]
-                    swapped_sentences.append(wrong_sent)
+                swapped_assignments = []
+                for template_role, filler_role in zip(role_list, shifted):
+                    filler = role_sentences[filler_role][0].get("filler", "")
+                    if not filler:
+                        filler = fillers[ROLES.index(filler_role)]
+                    sent = SWAP_TEMPLATES[template_role].format(
+                        nonce=nonce, filler=filler,
+                    )
+                    swapped_sentences.append(sent)
+                    swapped_assignments.append(
+                        f"{filler_role}_filler_in_{template_role}_template"
+                    )
                 swapped_combined = " ".join(swapped_sentences)
                 controls.append({
                     "condition_type": "control_info_matched",
@@ -340,9 +357,11 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                     "concept": concept,
                     "nonce_word": nonce,
                     "qualia_roles": list(ROLES),
+                    "fillers_used": fillers,
                     "stimulus": swapped_combined,
                     "sentences": swapped_sentences,
-                    "note": "same sentences as T+A+C+F but in wrong role order (rotated by 1)",
+                    "swapped_assignments": swapped_assignments,
+                    "note": "same fillers as T+A+C+F but each in the wrong qualia template",
                 })
 
     return controls

@@ -4,9 +4,11 @@
 Trains probes at each layer to predict the target concept from nonce word
 representations, for each experiment model.
 
-Uses GroupKFold with concept as the group variable to prevent data leakage —
-all stimuli for a given concept stay in the same fold, so the probe must
-generalize to unseen concepts.
+Uses StratifiedKFold — same concepts appear in train and test, but different
+orderings/stimuli. This tests whether the representation encodes concept
+identity across different qualia orderings. Caveat: within-concept stimuli
+share underlying filler content, so accuracy may be inflated vs. a true
+generalization test.
 """
 
 import argparse
@@ -16,7 +18,7 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import StratifiedKFold
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
@@ -80,20 +82,26 @@ def train_probes_for_model(
 
     le = LabelEncoder()
     y = le.fit_transform(concepts)
-    groups = np.array(concepts)  # GroupKFold groups = concepts
     n_classes = len(le.classes_)
 
     print(f"  {len(probe_stimuli)} stimuli, {n_classes} concepts")
+    print(f"  Note: StratifiedKFold — same concepts in train/test, different orderings")
 
-    if n_classes < n_folds:
-        print(f"  Too few concepts ({n_classes}) for {n_folds}-fold — skipping")
+    if n_classes < 2:
+        print("  Too few concepts — skipping")
         return
 
     # Sample layers
     layers = sorted(set([0, n_layers // 4, n_layers // 2,
                          3 * n_layers // 4, n_layers - 1]))
 
-    gkf = GroupKFold(n_splits=min(n_folds, n_classes))
+    min_per_class = min(np.bincount(y))
+    actual_folds = min(n_folds, min_per_class)
+    if actual_folds < 2:
+        print(f"  Some concepts have only {min_per_class} sample(s) — skipping")
+        return
+
+    skf = StratifiedKFold(n_splits=actual_folds, shuffle=True, random_state=42)
 
     results = []
     for layer in tqdm(layers, desc="Probing layers"):
@@ -102,7 +110,7 @@ def train_probes_for_model(
         del repr_layer
 
         fold_accs = []
-        for train_idx, test_idx in gkf.split(X, y, groups=groups):
+        for train_idx, test_idx in skf.split(X, y):
             clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs", n_jobs=-1)
             clf.fit(X[train_idx], y[train_idx])
             fold_accs.append(clf.score(X[test_idx], y[test_idx]))
@@ -117,13 +125,14 @@ def train_probes_for_model(
             "n_classes": n_classes,
             "n_samples": len(y),
             "chance": 1.0 / n_classes,
-            "split": "GroupKFold_by_concept",
+            "split": "StratifiedKFold",
+            "caveat": "train/test share concepts but not orderings",
         })
         print(f"    Layer {layer}: accuracy={mean_acc:.4f} ± {std_acc:.4f} "
               f"(chance={1/n_classes:.4f})")
 
     # Probe by n_roles at middle layer
-    print("\n  Probing by number of roles (middle layer, GroupKFold)...")
+    print("\n  Probing by number of roles (middle layer)...")
     mid_layer = n_layers // 2
 
     for n_roles in [1, 2, 3, 4]:
@@ -142,19 +151,20 @@ def train_probes_for_model(
         r_concepts = [s["concept"] for s in role_stimuli]
         r_le = LabelEncoder()
         r_y = r_le.fit_transform(r_concepts)
-        r_groups = np.array(r_concepts)
         r_n_classes = len(r_le.classes_)
 
-        if r_n_classes < n_folds:
+        r_min_per_class = min(np.bincount(r_y))
+        r_actual_folds = min(n_folds, r_min_per_class)
+        if r_n_classes < 2 or r_actual_folds < 2:
             continue
 
         repr_layer = load_layer(model_name, mid_layer, agg)
         X = repr_layer[r_indices].astype(np.float32)
         del repr_layer
 
-        r_gkf = GroupKFold(n_splits=min(n_folds, r_n_classes))
+        r_skf = StratifiedKFold(n_splits=r_actual_folds, shuffle=True, random_state=42)
         fold_accs = []
-        for train_idx, test_idx in r_gkf.split(X, r_y, groups=r_groups):
+        for train_idx, test_idx in r_skf.split(X, r_y):
             clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs", n_jobs=-1)
             clf.fit(X[train_idx], r_y[train_idx])
             fold_accs.append(clf.score(X[test_idx], r_y[test_idx]))
@@ -168,7 +178,7 @@ def train_probes_for_model(
             "n_classes": r_n_classes,
             "n_samples": len(r_y),
             "chance": 1.0 / r_n_classes,
-            "split": "GroupKFold_by_concept",
+            "split": "StratifiedKFold",
         })
         print(f"    {n_roles} roles: accuracy={mean_acc:.4f} "
               f"(chance={1/r_n_classes:.4f}, n={len(r_y)})")
