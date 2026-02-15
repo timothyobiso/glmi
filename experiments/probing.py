@@ -3,6 +3,10 @@
 
 Trains probes at each layer to predict the target concept from nonce word
 representations, for each experiment model.
+
+Uses GroupKFold with concept as the group variable to prevent data leakage —
+all stimuli for a given concept stay in the same fold, so the probe must
+generalize to unseen concepts.
 """
 
 import argparse
@@ -12,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import GroupKFold
 from sklearn.preprocessing import LabelEncoder
 from tqdm import tqdm
 
@@ -20,6 +24,16 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import config
 import utils
+
+
+def load_layer(model_name: str, layer: int, agg: str = "mean") -> np.ndarray:
+    """Load a single layer's representations via memmap."""
+    model_slug = model_name.replace("/", "--")
+    repr_dir = config.DATA / "representations" / model_slug
+    meta = utils.load_json(repr_dir / "metadata.json")
+    path = repr_dir / f"layer_{layer}_{agg}.dat"
+    return np.memmap(path, dtype=np.float16, mode="r",
+                     shape=(meta["n_stimuli"], meta["hidden_dim"]))
 
 
 def train_probes_for_model(
@@ -31,9 +45,8 @@ def train_probes_for_model(
 ):
     """Train layer-wise probes for one model.
 
-    For each layer, trains a logistic regression classifier to predict
-    the target concept from the nonce word representation.
-    Evaluates accuracy by condition type and number of roles.
+    Uses GroupKFold: all stimuli for a concept go in the same fold.
+    The probe must generalize to unseen concepts.
     """
     model_slug = model_name.replace("/", "--")
     repr_dir = config.DATA / "representations" / model_slug
@@ -44,13 +57,12 @@ def train_probes_for_model(
     print(f"Training probes for {model_name}")
     print(f"{'='*60}")
 
-    repr_data = np.load(repr_dir / f"representations_{agg}.npy")
     repr_meta = utils.load_json(repr_dir / "metadata.json")
     valid_mask = np.array(repr_meta["valid_mask"])
     stim_index = {sid: i for i, sid in enumerate(repr_meta["stimulus_ids"])}
     n_layers = repr_meta["n_layers"]
 
-    # Filter to accumulation conditions with all 4 roles (strongest signal)
+    # Filter to accumulation conditions with all 4 roles
     probe_stimuli = [
         s for s in stimuli
         if s["condition_type"] == "accumulation"
@@ -60,38 +72,40 @@ def train_probes_for_model(
     ]
 
     if len(probe_stimuli) < 50:
-        print(f"  Only {len(probe_stimuli)} valid 4-role stimuli — skipping probing")
+        print(f"  Only {len(probe_stimuli)} valid 4-role stimuli — skipping")
         return
 
-    # Build feature matrix and labels
-    indices = [stim_index[s["stimulus_id"]] for s in probe_stimuli]
+    indices = np.array([stim_index[s["stimulus_id"]] for s in probe_stimuli])
     concepts = [s["concept"] for s in probe_stimuli]
 
     le = LabelEncoder()
     y = le.fit_transform(concepts)
+    groups = np.array(concepts)  # GroupKFold groups = concepts
     n_classes = len(le.classes_)
+
     print(f"  {len(probe_stimuli)} stimuli, {n_classes} concepts")
 
-    if n_classes < 5:
-        print("  Too few concepts for probing — skipping")
+    if n_classes < n_folds:
+        print(f"  Too few concepts ({n_classes}) for {n_folds}-fold — skipping")
         return
 
     # Sample layers
-    layers = sorted(set([0, n_layers // 4, n_layers // 2, 3 * n_layers // 4, n_layers - 1]))
+    layers = sorted(set([0, n_layers // 4, n_layers // 2,
+                         3 * n_layers // 4, n_layers - 1]))
+
+    gkf = GroupKFold(n_splits=min(n_folds, n_classes))
 
     results = []
     for layer in tqdm(layers, desc="Probing layers"):
-        X = repr_data[indices, layer].astype(np.float32)
+        repr_layer = load_layer(model_name, layer, agg)
+        X = repr_layer[indices].astype(np.float32)
+        del repr_layer
 
-        # Stratified k-fold
-        skf = StratifiedKFold(n_splits=min(n_folds, min(np.bincount(y))), shuffle=True, random_state=42)
         fold_accs = []
-
-        for train_idx, test_idx in skf.split(X, y):
+        for train_idx, test_idx in gkf.split(X, y, groups=groups):
             clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs", n_jobs=-1)
             clf.fit(X[train_idx], y[train_idx])
-            acc = clf.score(X[test_idx], y[test_idx])
-            fold_accs.append(acc)
+            fold_accs.append(clf.score(X[test_idx], y[test_idx]))
 
         mean_acc = float(np.mean(fold_accs))
         std_acc = float(np.std(fold_accs))
@@ -103,17 +117,20 @@ def train_probes_for_model(
             "n_classes": n_classes,
             "n_samples": len(y),
             "chance": 1.0 / n_classes,
+            "split": "GroupKFold_by_concept",
         })
-        print(f"    Layer {layer}: accuracy={mean_acc:.4f} ± {std_acc:.4f} (chance={1/n_classes:.4f})")
+        print(f"    Layer {layer}: accuracy={mean_acc:.4f} ± {std_acc:.4f} "
+              f"(chance={1/n_classes:.4f})")
 
-    # Also probe by n_roles to see if more roles → better probing
-    print("\n  Probing by number of roles (at middle layer)...")
+    # Probe by n_roles at middle layer
+    print("\n  Probing by number of roles (middle layer, GroupKFold)...")
     mid_layer = n_layers // 2
 
     for n_roles in [1, 2, 3, 4]:
         role_stimuli = [
             s for s in stimuli
-            if s["condition_type"] in ("accumulation", "single_qualia", "combination_2", "combination_3")
+            if s["condition_type"] in ("accumulation", "single_qualia",
+                                       "combination_2", "combination_3")
             and len(s.get("qualia_roles", [])) == n_roles
             and s["stimulus_id"] in stim_index
             and valid_mask[stim_index[s["stimulus_id"]]]
@@ -121,19 +138,23 @@ def train_probes_for_model(
         if len(role_stimuli) < 50:
             continue
 
-        r_indices = [stim_index[s["stimulus_id"]] for s in role_stimuli]
+        r_indices = np.array([stim_index[s["stimulus_id"]] for s in role_stimuli])
         r_concepts = [s["concept"] for s in role_stimuli]
         r_le = LabelEncoder()
         r_y = r_le.fit_transform(r_concepts)
+        r_groups = np.array(r_concepts)
         r_n_classes = len(r_le.classes_)
 
-        if r_n_classes < 5 or min(np.bincount(r_y)) < 2:
+        if r_n_classes < n_folds:
             continue
 
-        X = repr_data[r_indices, mid_layer].astype(np.float32)
-        skf = StratifiedKFold(n_splits=min(n_folds, min(np.bincount(r_y))), shuffle=True, random_state=42)
+        repr_layer = load_layer(model_name, mid_layer, agg)
+        X = repr_layer[r_indices].astype(np.float32)
+        del repr_layer
+
+        r_gkf = GroupKFold(n_splits=min(n_folds, r_n_classes))
         fold_accs = []
-        for train_idx, test_idx in skf.split(X, r_y):
+        for train_idx, test_idx in r_gkf.split(X, r_y, groups=r_groups):
             clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs", n_jobs=-1)
             clf.fit(X[train_idx], r_y[train_idx])
             fold_accs.append(clf.score(X[test_idx], r_y[test_idx]))
@@ -147,8 +168,10 @@ def train_probes_for_model(
             "n_classes": r_n_classes,
             "n_samples": len(r_y),
             "chance": 1.0 / r_n_classes,
+            "split": "GroupKFold_by_concept",
         })
-        print(f"    {n_roles} roles: accuracy={mean_acc:.4f} (chance={1/r_n_classes:.4f}, n={len(r_y)})")
+        print(f"    {n_roles} roles: accuracy={mean_acc:.4f} "
+              f"(chance={1/r_n_classes:.4f}, n={len(r_y)})")
 
     utils.save_json(model_out / "probing_results.json", results)
     print(f"  Saved to {model_out / 'probing_results.json'}")

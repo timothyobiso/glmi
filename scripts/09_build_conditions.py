@@ -306,11 +306,14 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                     fillers.append(filler)
 
             if len(fillers) == 4:
-                # Flat listing: same information, no qualia framing
-                flat_sentence = (
-                    f"A {nonce} involves {fillers[0]}, {fillers[1]}, "
-                    f"{fillers[2]}, and {fillers[3]}."
-                )
+                # Flat: 4 sentences with same fillers, no qualia framing.
+                # Length-matched: same number of sentences and nonce
+                # occurrences as structured T+A+C+F.
+                flat_sentences = [
+                    f"The {nonce} is associated with {f}."
+                    for f in fillers
+                ]
+                flat_combined = " ".join(flat_sentences)
                 controls.append({
                     "condition_type": "control_info_matched",
                     "condition_label": "info_flat",
@@ -318,8 +321,8 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                     "nonce_word": nonce,
                     "qualia_roles": list(ROLES),
                     "fillers_used": fillers,
-                    "stimulus": flat_sentence,
-                    "sentences": [flat_sentence],
+                    "stimulus": flat_combined,
+                    "sentences": flat_sentences,
                 })
 
                 # Swapped roles: fillers placed in wrong qualia templates
