@@ -13,14 +13,28 @@ The dataset pairs **nonce words** (phonotactically legal pseudowords like *dax*,
 | **Constitutive** | Parts / materials | "has a blade and handle" |
 | **Formal** | Category / type | "a type of utensil" |
 
-The core question: as more qualia roles are revealed (T → T+A → T+A+C → T+A+C+F), does the LLM's representation of the nonce word converge toward the real concept?
+The core question: as more qualia roles are revealed, does the LLM's representation of the nonce word converge toward the real concept? And does it matter which roles are provided, and in what order?
 
-## Experimental Conditions
+## Experimental Design
+
+### Conditions
 
 - **Single-qualia:** T, A, C, F (one sentence each)
-- **Accumulation:** T, T+A, T+A+C, T+A+C+F (concatenated)
-- **Combinations:** All 2-role and 3-role combos (10 total)
-- **Controls:** Real word, conflicting qualia, scrambled, bare nonce
+- **Accumulation (all 24 orderings):** Every permutation of the 4 roles × 4 steps (e.g., T, T+A, T+A+C, T+A+C+F; A, A+C, A+C+T, A+C+T+F; etc.)
+- **Combinations:** All 6 two-role and 4 three-role combos
+- **Controls:**
+  - Real word (replace nonce with actual concept)
+  - Conflicting qualia (mix qualia from different concepts)
+  - Scrambled (shuffled non-nonce words)
+  - Bare nonce ("I saw a dax." — no qualia info)
+  - Information-matched flat (same fillers, no qualia framing)
+  - Information-matched swapped (sentences in wrong role order)
+
+### Evaluation
+
+- **Absolute:** Cosine similarity between nonce word representation and target concept reference, across layers
+- **Discriminative:** Rank target among 10 distractors (5 hard same-category + 5 random) by cosine sim — MRR, Hits@1, Hits@3
+- **Cross-architecture:** Compared across Llama-3.1-8B and Mistral-7B-v0.3
 
 ## Pipeline
 
@@ -60,7 +74,7 @@ The script handles `uv` setup, dependency installation, NLTK data downloads, Con
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) (installed automatically by `run.sh` if missing)
 - GPU with enough VRAM for Llama-3.1-8B-Instruct (~16GB for vLLM, less with `--transformers` + float16)
-- HuggingFace access to `meta-llama/Llama-3.1-8B` and `meta-llama/Llama-3.1-8B-Instruct`
+- HuggingFace access to `meta-llama/Llama-3.1-8B-Instruct` (naturalization), `meta-llama/Llama-3.1-8B` and `mistralai/Mistral-7B-v0.3` (experiments)
 - ~2GB disk for ConceptNet dump + cached index
 
 ## Data Sources
@@ -79,12 +93,15 @@ Each record in `data/stimuli/stimuli_final.jsonl`:
   "stimulus_id": "stim_00042",
   "condition_type": "accumulation",
   "condition_label": "T+A",
+  "ordering": "TACF",
   "concept": "knife",
   "nonce_word": "blicket",
   "qualia_roles": ["telic", "agentive"],
   "stimulus": "She used the blicket to slice the bread. The blicket was forged by a blacksmith.",
   "sentences": ["She used the blicket to slice the bread.", "The blicket was forged by a blacksmith."],
-  "nonce_word_indices": [4, 10]
+  "nonce_word_indices": [4, 10],
+  "distractors": ["sword", "fork", "spoon", "hammer", "pen", "scissors", "axe", "saw", "chisel", "needle"],
+  "hard_distractors": ["sword", "fork", "spoon", "hammer", "scissors"]
 }
 ```
 
@@ -106,9 +123,9 @@ Each record in `data/stimuli/stimuli_final.jsonl`:
 │   ├── 08_validate_stimuli.py     # Validation + dedup
 │   └── 09_build_conditions.py     # Experimental conditions + controls
 ├── experiments/           # Analysis stubs (post-dataset)
-│   ├── extract.py         # Hidden state extraction
+│   ├── extract.py         # Hidden state extraction (Llama + Mistral)
 │   ├── references.py      # Reference representations
-│   ├── rsa.py             # Cosine similarity analysis
+│   ├── rsa.py             # Cosine similarity + discriminative eval
 │   ├── probing.py         # Layer-wise probes
 │   └── patching.py        # Activation patching
 └── data/
@@ -116,7 +133,7 @@ Each record in `data/stimuli/stimuli_final.jsonl`:
     ├── ontology/          # Merged qualia ontology
     ├── nonce_words/       # Generated pseudowords
     ├── stimuli/           # Templates → naturalized → validated → final
-    └── controls/          # Control conditions
+    └── controls/          # Control conditions + distractor map
 ```
 
 ## Configuration
@@ -128,6 +145,9 @@ Key parameters in `config.py`:
 | `CONCRETENESS_THRESHOLD` | 4.0 | Minimum Brysbaert concreteness rating |
 | `TARGET_CONCEPTS` | 500 | Target number of concepts with all 4 qualia roles |
 | `TARGET_NONCE_WORDS` | 100 | Number of nonce words to generate |
-| `MIN_NONCE_TOKENS` / `MAX_NONCE_TOKENS` | 2 / 4 | Llama subword token count bounds |
+| `MIN_NONCE_TOKENS` / `MAX_NONCE_TOKENS` | 2 / 4 | Subword token count bounds (validated against both models) |
 | `NATURALIZE_MODEL` | meta-llama/Llama-3.1-8B-Instruct | Local model for sentence naturalization |
+| `EXPERIMENT_MODELS` | Llama-3.1-8B, Mistral-7B-v0.3 | Models for hidden state extraction |
+| `N_HARD_DISTRACTORS` | 5 | Same-category distractors (WordNet hypernym match) |
+| `N_RANDOM_DISTRACTORS` | 5 | Random distractors from remaining pool |
 | `JACCARD_DEDUP_THRESHOLD` | 0.8 | Near-duplicate removal threshold |

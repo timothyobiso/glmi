@@ -2,8 +2,9 @@
 """Step 9: Build experimental conditions and controls.
 
 Creates single-qualia, accumulation (all 24 orderings), combination conditions,
-plus control conditions (real word, conflicting, scrambled, bare nonce).
-Assigns distractor concepts for discriminative evaluation.
+plus control conditions (real word, conflicting, scrambled, bare nonce,
+and information-matched unstructured).
+Assigns hard (same-category) + random distractors for discriminative evaluation.
 
 Depends on: 08.
 Output: stimuli_final.jsonl + control files + dataset stats.
@@ -33,19 +34,76 @@ def get_nonce_token_indices(sentence: str, nonce_word: str) -> list[int]:
     return indices
 
 
-def assign_distractors(all_concepts: list[str], n: int, seed: int = 42) -> dict[str, list[str]]:
-    """Assign N distractor concepts to each concept for discriminative evaluation.
+# ── Semantic distractor assignment ────────────────────────────────────────────
 
-    Distractors are randomly sampled from the other concepts.
+def build_hypernym_index(concepts: list[str]) -> dict[str, set[str]]:
+    """Build concept → top hypernym(s) mapping using WordNet."""
+    from nltk.corpus import wordnet as wn
+
+    concept_to_hypernyms = {}
+    for concept in concepts:
+        synsets = wn.synsets(concept, pos=wn.NOUN)[:2]
+        hypers = set()
+        for ss in synsets:
+            for h in ss.hypernyms():
+                hypers.add(h.name())
+        concept_to_hypernyms[concept] = hypers
+    return concept_to_hypernyms
+
+
+def assign_distractors(
+    all_concepts: list[str],
+    n_hard: int,
+    n_random: int,
+    seed: int = 42,
+) -> dict[str, dict]:
+    """Assign hard (same-category) + random distractors per concept.
+
+    Hard distractors share a WordNet hypernym with the target.
+    Random distractors are sampled from the remaining concepts.
     """
     rng = random.Random(seed)
+    hyper_index = build_hypernym_index(all_concepts)
+
+    # Build reverse index: hypernym → concepts
+    hyper_to_concepts = {}
+    for concept, hypers in hyper_index.items():
+        for h in hypers:
+            hyper_to_concepts.setdefault(h, set()).add(concept)
+
     assignments = {}
     for concept in all_concepts:
-        pool = [c for c in all_concepts if c != concept]
-        distractors = rng.sample(pool, min(n, len(pool)))
-        assignments[concept] = distractors
+        # Hard distractors: same hypernym
+        same_category = set()
+        for h in hyper_index.get(concept, set()):
+            same_category |= hyper_to_concepts.get(h, set())
+        same_category.discard(concept)
+        same_category = list(same_category)
+
+        hard = rng.sample(same_category, min(n_hard, len(same_category)))
+
+        # Random distractors: from remaining pool
+        hard_set = set(hard)
+        random_pool = [c for c in all_concepts if c != concept and c not in hard_set]
+        rand = rng.sample(random_pool, min(n_random, len(random_pool)))
+
+        # If we couldn't find enough hard distractors, fill with random
+        shortfall = (n_hard + n_random) - len(hard) - len(rand)
+        if shortfall > 0:
+            extra_pool = [c for c in all_concepts if c != concept and c not in hard_set and c not in set(rand)]
+            extra = rng.sample(extra_pool, min(shortfall, len(extra_pool)))
+            rand.extend(extra)
+
+        assignments[concept] = {
+            "hard": hard,
+            "random": rand,
+            "all": hard + rand,
+        }
+
     return assignments
 
+
+# ── Condition builders ────────────────────────────────────────────────────────
 
 def build_single_qualia(stimuli_by_concept: dict) -> list[dict]:
     """Single-qualia conditions: T, A, C, F."""
@@ -73,8 +131,7 @@ def build_single_qualia(stimuli_by_concept: dict) -> list[dict]:
 def build_accumulation(stimuli_by_concept: dict) -> list[dict]:
     """Accumulation conditions: all 24 orderings of T/A/C/F.
 
-    For each permutation, generates 4 conditions (1-role, 2-role, 3-role, 4-role)
-    using that specific ordering.
+    For each permutation, generates 4 conditions (1-role, 2-role, 3-role, 4-role).
     """
     all_orderings = list(itertools.permutations(ROLES))
     conditions = []
@@ -111,7 +168,7 @@ def build_accumulation(stimuli_by_concept: dict) -> list[dict]:
 
 
 def build_combinations(stimuli_by_concept: dict) -> list[dict]:
-    """All 2-qualia and 3-qualia combinations (unordered sets, single canonical order)."""
+    """All 2-qualia and 3-qualia combinations (unordered sets, canonical order)."""
     conditions = []
 
     for concept, role_sentences in stimuli_by_concept.items():
@@ -145,7 +202,7 @@ def build_combinations(stimuli_by_concept: dict) -> list[dict]:
 
 
 def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[dict]:
-    """Build control conditions."""
+    """Build control conditions including information-matched controls."""
     controls = []
     random.seed(42)
 
@@ -158,7 +215,9 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
         if not nonce:
             continue
 
-        # 1. Real word control — replace nonce with actual concept
+        has_all_4 = all(role_sentences.get(r) for r in ROLES)
+
+        # ── 1. Real word control ──────────────────────────────────────────
         for role in ROLES:
             if not role_sentences.get(role):
                 continue
@@ -175,9 +234,9 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                 "sentences": [real_sentence],
             })
 
-        # 2. Conflicting qualia — mix qualia from different concepts
+        # ── 2. Conflicting qualia ─────────────────────────────────────────
         other_concepts = [c for c in all_concepts if c != concept]
-        if other_concepts and all(role_sentences.get(r) for r in ROLES):
+        if other_concepts and has_all_4:
             other = random.choice(other_concepts)
             other_roles = stimuli_by_concept.get(other, {})
 
@@ -197,7 +256,7 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                     "sentences": [t_sent, a_sent],
                 })
 
-        # 3. Scrambled control — shuffle words (except nonce)
+        # ── 3. Scrambled control ──────────────────────────────────────────
         if role_sentences.get("telic"):
             sentence = role_sentences["telic"][0]["naturalized"]
             words = sentence.split()
@@ -224,7 +283,7 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
                 "sentences": [" ".join(scrambled)],
             })
 
-        # 4. Bare nonce — minimal context
+        # ── 4. Bare nonce ─────────────────────────────────────────────────
         controls.append({
             "condition_type": "control_bare",
             "condition_label": "bare",
@@ -234,6 +293,54 @@ def build_controls(stimuli_by_concept: dict, all_concepts: list[str]) -> list[di
             "stimulus": f"I saw a {nonce}.",
             "sentences": [f"I saw a {nonce}."],
         })
+
+        # ── 5. Information-matched unstructured control ───────────────────
+        # Same fillers from all 4 roles, but in a flat descriptive sentence
+        # without qualia-structured templates. Tests whether GL structure
+        # matters beyond raw informational content.
+        if has_all_4:
+            fillers = []
+            for role in ROLES:
+                filler = role_sentences[role][0].get("filler", "")
+                if filler:
+                    fillers.append(filler)
+
+            if len(fillers) == 4:
+                # Flat listing: same information, no qualia framing
+                flat_sentence = (
+                    f"A {nonce} involves {fillers[0]}, {fillers[1]}, "
+                    f"{fillers[2]}, and {fillers[3]}."
+                )
+                controls.append({
+                    "condition_type": "control_info_matched",
+                    "condition_label": "info_flat",
+                    "concept": concept,
+                    "nonce_word": nonce,
+                    "qualia_roles": list(ROLES),
+                    "fillers_used": fillers,
+                    "stimulus": flat_sentence,
+                    "sentences": [flat_sentence],
+                })
+
+                # Swapped roles: fillers placed in wrong qualia templates
+                # e.g., telic filler in constitutive template, etc.
+                role_list = list(ROLES)
+                shifted = role_list[1:] + role_list[:1]  # rotate by 1
+                swapped_sentences = []
+                for orig_role, wrong_role in zip(role_list, shifted):
+                    wrong_sent = role_sentences[wrong_role][0]["naturalized"]
+                    swapped_sentences.append(wrong_sent)
+                swapped_combined = " ".join(swapped_sentences)
+                controls.append({
+                    "condition_type": "control_info_matched",
+                    "condition_label": "info_swapped",
+                    "concept": concept,
+                    "nonce_word": nonce,
+                    "qualia_roles": list(ROLES),
+                    "stimulus": swapped_combined,
+                    "sentences": swapped_sentences,
+                    "note": "same sentences as T+A+C+F but in wrong role order (rotated by 1)",
+                })
 
     return controls
 
@@ -257,9 +364,18 @@ def main():
     all_concepts = list(stimuli_by_concept.keys())
     print(f"Concepts: {len(all_concepts)}")
 
-    # Assign distractors for discriminative evaluation
-    print(f"\nAssigning {config.N_DISTRACTORS} distractors per concept...")
-    distractor_map = assign_distractors(all_concepts, config.N_DISTRACTORS)
+    # Assign distractors (hard + random) for discriminative evaluation
+    print(f"\nAssigning distractors: {config.N_HARD_DISTRACTORS} hard + "
+          f"{config.N_RANDOM_DISTRACTORS} random per concept...")
+    distractor_map = assign_distractors(
+        all_concepts, config.N_HARD_DISTRACTORS, config.N_RANDOM_DISTRACTORS,
+    )
+
+    # Stats on hard distractor coverage
+    n_with_hard = sum(1 for d in distractor_map.values() if d["hard"])
+    avg_hard = sum(len(d["hard"]) for d in distractor_map.values()) / max(len(distractor_map), 1)
+    print(f"  Concepts with ≥1 hard distractor: {n_with_hard}/{len(all_concepts)}")
+    print(f"  Avg hard distractors per concept: {avg_hard:.1f}")
 
     # Build conditions
     print("\nBuilding conditions...")
@@ -281,15 +397,20 @@ def main():
     print("\nBuilding controls...")
     controls = build_controls(stimuli_by_concept, all_concepts)
     print(f"  Controls: {len(controls)}")
+    for ct in sorted(set(c["condition_type"] for c in controls)):
+        n = sum(1 for c in controls if c["condition_type"] == ct)
+        print(f"    {ct}: {n}")
 
     # Assign unique IDs and distractors to all stimuli + controls
     for i, cond in enumerate(all_conditions):
         cond["stimulus_id"] = f"stim_{i:05d}"
-        cond["distractors"] = distractor_map.get(cond["concept"], [])
+        cond["distractors"] = distractor_map.get(cond["concept"], {}).get("all", [])
+        cond["hard_distractors"] = distractor_map.get(cond["concept"], {}).get("hard", [])
 
     for i, ctrl in enumerate(controls):
         ctrl["stimulus_id"] = f"ctrl_{i:05d}"
-        ctrl["distractors"] = distractor_map.get(ctrl["concept"], [])
+        ctrl["distractors"] = distractor_map.get(ctrl["concept"], {}).get("all", [])
+        ctrl["hard_distractors"] = distractor_map.get(ctrl["concept"], {}).get("hard", [])
 
     # Save final stimuli
     out_path = config.STIMULI / "stimuli_final.jsonl"
@@ -315,6 +436,8 @@ def main():
         "concepts_with_all_4_roles": n_concepts_all4,
         "accumulation_orderings": 24,
         "distractors_per_concept": config.N_DISTRACTORS,
+        "hard_distractors_per_concept": config.N_HARD_DISTRACTORS,
+        "random_distractors_per_concept": config.N_RANDOM_DISTRACTORS,
         "experiment_models": config.EXPERIMENT_MODELS,
         "conditions": {},
     }
@@ -340,7 +463,7 @@ def main():
     print(f"  Unique concepts: {stats['unique_concepts']}")
     print(f"  Concepts with all 4 roles: {n_concepts_all4}")
     print(f"  Accumulation orderings: 24")
-    print(f"  Distractors per concept: {config.N_DISTRACTORS}")
+    print(f"  Distractors: {config.N_HARD_DISTRACTORS} hard + {config.N_RANDOM_DISTRACTORS} random")
     print(f"  Experiment models: {config.EXPERIMENT_MODELS}")
     for ct, count in sorted(stats["conditions"].items()):
         print(f"  {ct}: {count}")

@@ -99,3 +99,5 @@ EXPERIMENT_MODELS = [
 
 # ── Discriminative evaluation ─────────────────────────────────────────────────
 N_DISTRACTORS = 10  # number of distractor concepts per stimulus
+N_HARD_DISTRACTORS = 5  # of N_DISTRACTORS, how many are same-category (hard)
+N_RANDOM_DISTRACTORS = 5  # remaining are random (easy)
