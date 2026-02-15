@@ -6,16 +6,14 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 DATA = ROOT / "data"
 RAW = DATA / "raw"
-CONCEPTNET_CACHE = RAW / "conceptnet"
 ONTOLOGY = DATA / "ontology"
 NONCE = DATA / "nonce_words"
 STIMULI = DATA / "stimuli"
 CONTROLS = DATA / "controls"
 
-# ── ConceptNet ─────────────────────────────────────────────────────────────────
-CONCEPTNET_API = "http://api.conceptnet.io"
-CONCEPTNET_LIMIT = 1000
-CONCEPTNET_RATE_LIMIT = 1.0  # seconds between requests
+# ── ConceptNet (local CSV dump) ───────────────────────────────────────────────
+CONCEPTNET_CSV = RAW / "conceptnet-assertions-5.7.0.csv.gz"
+CONCEPTNET_EN_INDEX = RAW / "conceptnet_en_index.pkl"
 
 # ConceptNet relation → GL qualia role mapping
 RELATION_TO_QUALIA = {
@@ -86,10 +84,11 @@ VAGUE_FILLERS = {
     "that", "everything", "nothing", "entity", "entities",
 }
 
-# ── Claude API ─────────────────────────────────────────────────────────────────
-CLAUDE_MODEL = "claude-sonnet-4-5-20250929"
-CLAUDE_MAX_CONCURRENT = 15
-CLAUDE_BATCH_SIZE = 1000  # requests per batch
+# ── Local model for naturalization + gap filling ──────────────────────────────
+NATURALIZE_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
+NATURALIZE_MAX_TOKENS = 100
+NATURALIZE_BATCH_SIZE = 256  # vLLM batch size
+NATURALIZE_TEMPERATURE = 0.7
 
-# ── Llama tokenizer ───────────────────────────────────────────────────────────
+# ── Llama tokenizer (for nonce word validation) ──────────────────────────────
 LLAMA_MODEL = "meta-llama/Llama-3.1-8B"

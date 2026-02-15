@@ -1,66 +1,112 @@
 """Shared utilities for GL-Qualia dataset generation."""
 
+import csv
+import gzip
 import json
-import time
+import pickle
+from collections import defaultdict
 from pathlib import Path
 
-import backoff
-import requests
+from tqdm import tqdm
 
 import config
 
 
-# ── Rate-limited API fetching ─────────────────────────────────────────────────
+# ── ConceptNet local index ────────────────────────────────────────────────────
 
-_last_request_time = 0.0
+def build_conceptnet_index() -> dict[str, list[dict]]:
+    """Build an in-memory index of English ConceptNet edges keyed by word.
+
+    Reads the full assertions CSV (gzipped), filters to English-only edges
+    with relevant relations, and returns {word: [edge_dicts]}.
+    Caches the result as a pickle for fast reloading.
+    """
+    if config.CONCEPTNET_EN_INDEX.exists():
+        print(f"Loading cached ConceptNet index from {config.CONCEPTNET_EN_INDEX}...")
+        with open(config.CONCEPTNET_EN_INDEX, "rb") as f:
+            return pickle.load(f)
+
+    print(f"Building ConceptNet English index from {config.CONCEPTNET_CSV}...")
+    print("  (This takes a few minutes on first run, then is cached)")
+
+    relevant_relations = set(config.RELATION_TO_QUALIA.keys()) | config.AGENTIVE_FALLBACK_RELATIONS
+    index = defaultdict(list)
+
+    with gzip.open(config.CONCEPTNET_CSV, "rt", encoding="utf-8") as f:
+        reader = csv.reader(f, delimiter="\t")
+        for row in tqdm(reader, desc="Reading ConceptNet CSV", unit=" edges"):
+            if len(row) < 5:
+                continue
+            # Columns: URI, relation, start, end, json_data
+            rel, start, end = row[1], row[2], row[3]
+
+            if rel not in relevant_relations:
+                continue
+
+            # Filter to English
+            if not (start.startswith("/c/en/") and end.startswith("/c/en/")):
+                continue
+
+            # Parse JSON metadata for weight
+            try:
+                meta = json.loads(row[4])
+            except (json.JSONDecodeError, IndexError):
+                meta = {}
+
+            weight = meta.get("weight", 1.0)
+            surface = meta.get("surfaceText", "")
+
+            # Extract word from URI: /c/en/word/... → word
+            start_word = start.split("/")[3]
+            end_word = end.split("/")[3]
+
+            edge = {
+                "rel": rel,
+                "start": start_word,
+                "end": end_word,
+                "weight": weight,
+                "surface": surface,
+            }
+
+            index[start_word].append(edge)
+            if end_word != start_word:
+                index[end_word].append(edge)
+
+    index = dict(index)
+    print(f"  Indexed {sum(len(v) for v in index.values())} edges for {len(index)} words")
+
+    # Cache
+    config.CONCEPTNET_EN_INDEX.parent.mkdir(parents=True, exist_ok=True)
+    with open(config.CONCEPTNET_EN_INDEX, "wb") as f:
+        pickle.dump(index, f)
+    print(f"  Cached index to {config.CONCEPTNET_EN_INDEX}")
+
+    return index
 
 
-@backoff.on_exception(backoff.expo, requests.exceptions.RequestException, max_tries=5)
-def fetch_conceptnet(word: str) -> dict:
-    """Fetch ConceptNet edges for a word, with rate limiting and caching."""
-    cache_path = config.CONCEPTNET_CACHE / f"{word}.json"
-    if cache_path.exists():
-        return json.loads(cache_path.read_text())
-
-    global _last_request_time
-    elapsed = time.time() - _last_request_time
-    if elapsed < config.CONCEPTNET_RATE_LIMIT:
-        time.sleep(config.CONCEPTNET_RATE_LIMIT - elapsed)
-
-    url = f"{config.CONCEPTNET_API}/c/en/{word}?limit={config.CONCEPTNET_LIMIT}"
-    resp = requests.get(url, timeout=30)
-    _last_request_time = time.time()
-    resp.raise_for_status()
-    data = resp.json()
-
-    cache_path.write_text(json.dumps(data))
-    return data
+def get_conceptnet_edges(word: str, index: dict[str, list[dict]]) -> list[dict]:
+    """Look up edges for a word from the local index."""
+    return index.get(word.lower().replace(" ", "_"), [])
 
 
-def extract_filler(edge: dict, source_word: str) -> str | None:
+def extract_filler_from_edge(edge: dict, source_word: str) -> str | None:
     """Extract the filler text from a ConceptNet edge (the 'other' end)."""
-    start = edge.get("start", {})
-    end = edge.get("end", {})
-    start_label = start.get("label", "").lower()
-    end_label = end.get("label", "").lower()
+    start = edge["start"].replace("_", " ")
+    end = edge["end"].replace("_", " ")
     source_lower = source_word.lower()
 
-    # We want the end that is NOT the source word
-    if start_label == source_lower:
-        filler = end_label
-    elif end_label == source_lower:
-        filler = start_label
+    if start == source_lower:
+        filler = end
+    elif end == source_lower:
+        filler = start
     else:
-        # Use surfaceText as fallback
-        surface = edge.get("surfaceText", "")
+        # Source word is a substring — use surface text
+        surface = edge.get("surface", "")
         if surface:
-            # Remove the source word and brackets from surface text
             filler = surface.replace("[[", "").replace("]]", "")
-            # Try to extract the non-source part
             parts = filler.split(source_lower)
             filler = max(parts, key=len).strip().strip(".,;: ")
-            if filler:
-                return filler
+            return filler if filler else None
         return None
 
     return filler if filler else None

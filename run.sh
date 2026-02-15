@@ -3,6 +3,7 @@ set -euo pipefail
 
 # GL-Qualia Nonce Word Dataset Generation
 # Full setup + sequential pipeline execution
+# All processing is local — no API keys needed.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -16,7 +17,7 @@ echo ""
 echo "▸ Step 0: Project setup"
 
 # Create directory tree
-mkdir -p data/{raw/conceptnet,ontology,nonce_words,stimuli,controls}
+mkdir -p data/{raw,ontology,nonce_words,stimuli,controls}
 mkdir -p scripts experiments
 
 # Initialize uv project and install deps
@@ -36,7 +37,6 @@ import nltk
 for pkg in ['wordnet', 'omw-1.4', 'words', 'averaged_perceptron_tagger']:
     nltk.download(pkg, quiet=True)
     print(f'  ✓ {pkg}')
-# FrameNet is large (~170MB) - try but don't fail if disk is tight
 try:
     nltk.download('framenet_v17', quiet=True)
     print('  ✓ framenet_v17')
@@ -57,35 +57,42 @@ if [ ! -f data/raw/brysbaert_concreteness.csv ]; then
         2>/dev/null || {
         echo "  ⚠ Could not download concreteness ratings automatically."
         echo "    Please download manually to data/raw/brysbaert_concreteness.csv"
-        echo "    Source: https://github.com/ArtsEngine/concreteness/raw/master/data/concrete.csv"
     }
+fi
+
+# Download ConceptNet assertions dump if not present (~600MB compressed)
+if [ ! -f data/raw/conceptnet-assertions-5.7.0.csv.gz ]; then
+    echo "  Downloading ConceptNet assertions dump (~600MB)..."
+    wget -O data/raw/conceptnet-assertions-5.7.0.csv.gz \
+        'https://s3.amazonaws.com/conceptnet/downloads/2019/edges/conceptnet-assertions-5.7.0.csv.gz' \
+        || curl -L -o data/raw/conceptnet-assertions-5.7.0.csv.gz \
+        'https://s3.amazonaws.com/conceptnet/downloads/2019/edges/conceptnet-assertions-5.7.0.csv.gz'
 fi
 
 echo "  ✓ Setup complete"
 
-# ── Step 1-3: Extraction (01 is slow, 02/03/05 run in parallel) ───────────────
+# ── Steps 1-3 + 5: Extraction (all fast with local data) ─────────────────────
 echo ""
 echo "▸ Steps 1-3: Extracting qualia from ConceptNet, WordNet, FrameNet"
-echo "  (ConceptNet is rate-limited ~1 req/sec, will take ~25-40 min)"
 
-# Start ConceptNet extraction (slow)
+# ConceptNet (local dump — builds index on first run, ~3-5 min, then cached)
 uv run python scripts/01_extract_conceptnet.py &
 PID_CN=$!
 
-# Run WordNet and FrameNet in parallel (both fast)
+# WordNet and FrameNet in parallel (both fast)
 uv run python scripts/02_extract_wordnet.py &
 PID_WN=$!
 
 uv run python scripts/03_extract_bso.py &
 PID_BSO=$!
 
-# Run nonce word generation in parallel too (independent)
+# Nonce word generation in parallel (independent)
 echo ""
 echo "▸ Step 5: Generating nonce words (parallel with extraction)"
 uv run python scripts/05_generate_nonce_words.py &
 PID_NONCE=$!
 
-# Wait for fast ones first
+# Wait for all
 echo "  Waiting for WordNet..."
 wait $PID_WN && echo "  ✓ WordNet extraction complete" || echo "  ✗ WordNet extraction failed"
 
@@ -95,7 +102,7 @@ wait $PID_BSO && echo "  ✓ FrameNet extraction complete" || echo "  ✗ FrameN
 echo "  Waiting for nonce words..."
 wait $PID_NONCE && echo "  ✓ Nonce word generation complete" || echo "  ✗ Nonce word generation failed"
 
-echo "  Waiting for ConceptNet (this takes a while)..."
+echo "  Waiting for ConceptNet..."
 wait $PID_CN && echo "  ✓ ConceptNet extraction complete" || echo "  ✗ ConceptNet extraction failed"
 
 # ── Step 4: Merge ─────────────────────────────────────────────────────────────
@@ -112,10 +119,10 @@ echo "  ✓ Template generation complete"
 
 # ── Step 7: Naturalize ────────────────────────────────────────────────────────
 echo ""
-echo "▸ Step 7: Naturalizing sentences with Claude"
-echo "  (Batch API ~1-2 hours; use --concurrent flag for async fallback)"
-if [ "${1:-}" = "--concurrent" ]; then
-    uv run python scripts/07_naturalize_sentences.py --concurrent
+echo "▸ Step 7: Naturalizing sentences with local LLM"
+echo "  (Uses vLLM by default; pass --transformers for HF pipeline fallback)"
+if [ "${1:-}" = "--transformers" ]; then
+    uv run python scripts/07_naturalize_sentences.py --transformers
 else
     uv run python scripts/07_naturalize_sentences.py
 fi

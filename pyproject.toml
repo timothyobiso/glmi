@@ -4,15 +4,15 @@ version = "0.1.0"
 description = "GL-Qualia Nonce Word Dataset Generation for CoNLL 2026"
 requires-python = ">=3.10"
 dependencies = [
-    "requests>=2.31",
     "nltk>=3.8",
-    "anthropic>=0.40",
     "transformers>=4.40",
     "pandas>=2.1",
     "tqdm>=4.66",
     "inflect>=7.0",
     "jsonlines>=4.0",
-    "backoff>=2.2",
+    "torch>=2.0",
+    "vllm>=0.6",
+    "accelerate>=0.30",
 ]
 
 [tool.hatch.build.targets.wheel]

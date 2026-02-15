@@ -1,22 +1,18 @@
 #!/usr/bin/env python3
-"""Step 7: Naturalize templated sentences using Claude.
+"""Step 7: Naturalize templated sentences using a local LLM.
 
-Uses Claude Batch API for cost efficiency, with async concurrent fallback.
+Uses vLLM for fast batched inference with a local instruct model.
 Rewrites sentences to sound natural while preserving nonce word and qualia info.
 
 Depends on: 06.
-Cost: ~$3-4, Runtime: ~1-2 hours for batch.
+Runtime: ~10-30 min depending on GPU and batch size.
 """
 
-import asyncio
-import json
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-import anthropic
 from tqdm import tqdm
 
 import config
@@ -39,123 +35,110 @@ QUALIA_DESCRIPTIONS = {
 }
 
 
-def create_batch_requests(records: list[dict]) -> list[dict]:
-    """Create batch API request objects."""
-    requests = []
-    for i, rec in enumerate(records):
-        prompt = NATURALIZE_PROMPT.format(
-            nonce_word=rec["nonce_word"],
-            qualia_role=rec["qualia_role"],
-            qualia_desc=QUALIA_DESCRIPTIONS[rec["qualia_role"]],
-            sentence=rec["sentence"],
-        )
-        requests.append({
-            "custom_id": str(i),
-            "params": {
-                "model": config.CLAUDE_MODEL,
-                "max_tokens": 100,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        })
-    return requests
+def build_chat_prompt(rec: dict) -> list[dict]:
+    """Build a chat-format prompt for a single record."""
+    user_msg = NATURALIZE_PROMPT.format(
+        nonce_word=rec["nonce_word"],
+        qualia_role=rec["qualia_role"],
+        qualia_desc=QUALIA_DESCRIPTIONS[rec["qualia_role"]],
+        sentence=rec["sentence"],
+    )
+    return [{"role": "user", "content": user_msg}]
 
 
-def run_batch(client: anthropic.Anthropic, records: list[dict]) -> list[dict]:
-    """Submit batch and poll for completion."""
-    batch_requests = create_batch_requests(records)
+def naturalize_with_vllm(records: list[dict]) -> list[dict]:
+    """Naturalize all sentences using vLLM batched inference."""
+    from vllm import LLM, SamplingParams
 
-    # Write batch input file
-    batch_input_path = config.STIMULI / "batch_input.jsonl"
-    utils.write_jsonl(batch_input_path, batch_requests)
-    print(f"Wrote {len(batch_requests)} batch requests to {batch_input_path}")
+    print(f"Loading model {config.NATURALIZE_MODEL}...")
+    llm = LLM(model=config.NATURALIZE_MODEL)
+    tokenizer = llm.get_tokenizer()
+    sampling = SamplingParams(
+        temperature=config.NATURALIZE_TEMPERATURE,
+        max_tokens=config.NATURALIZE_MAX_TOKENS,
+    )
 
-    # Submit batch
-    print("Submitting batch to Claude API...")
-    with open(batch_input_path) as f:
-        batch = client.messages.batches.create(
-            requests=[json.loads(line) for line in f],
-        )
+    # Build prompts using chat template
+    prompts = []
+    for rec in tqdm(records, desc="Building prompts"):
+        messages = build_chat_prompt(rec)
+        prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        prompts.append(prompt)
 
-    print(f"Batch ID: {batch.id}")
-    print(f"Batch status: {batch.processing_status}")
-
-    # Poll for completion
-    while True:
-        batch = client.messages.batches.retrieve(batch.id)
-        status = batch.processing_status
-        counts = batch.request_counts
-        print(f"  Status: {status} | Succeeded: {counts.succeeded}/{len(batch_requests)} | "
-              f"Failed: {counts.errored} | Processing: {counts.processing}")
-
-        if status == "ended":
-            break
-        time.sleep(30)
-
-    # Retrieve results
+    # Process in batches to manage memory
+    batch_size = config.NATURALIZE_BATCH_SIZE
     results = []
-    for result in client.messages.batches.results(batch.id):
-        idx = int(result.custom_id)
-        if result.result.type == "succeeded":
-            text = result.result.message.content[0].text.strip()
-            rec = records[idx].copy()
-            rec["naturalized"] = text
-            rec["naturalize_status"] = "success"
-        else:
-            rec = records[idx].copy()
-            rec["naturalized"] = rec["sentence"]  # fallback to original
-            rec["naturalize_status"] = "failed"
-        results.append(rec)
+
+    for start in tqdm(range(0, len(prompts), batch_size), desc="Generating"):
+        batch_prompts = prompts[start:start + batch_size]
+        batch_records = records[start:start + batch_size]
+
+        outputs = llm.generate(batch_prompts, sampling)
+
+        for rec, output in zip(batch_records, outputs):
+            text = output.outputs[0].text.strip()
+            # Clean up: take first line, strip quotes
+            text = text.split("\n")[0].strip().strip('"\'')
+
+            result = rec.copy()
+            result["naturalized"] = text
+            result["naturalize_status"] = "success"
+            results.append(result)
+
+    # Free GPU memory
+    del llm
+    try:
+        import torch
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
 
     return results
 
 
-async def run_concurrent(records: list[dict]) -> list[dict]:
-    """Fallback: use async concurrent requests."""
-    client = anthropic.AsyncAnthropic()
-    semaphore = asyncio.Semaphore(config.CLAUDE_MAX_CONCURRENT)
-    results = [None] * len(records)
+def naturalize_with_transformers(records: list[dict]) -> list[dict]:
+    """Fallback: use HuggingFace transformers pipeline (slower, no vLLM needed)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    async def process_one(i: int, rec: dict):
-        async with semaphore:
-            prompt = NATURALIZE_PROMPT.format(
-                nonce_word=rec["nonce_word"],
-                qualia_role=rec["qualia_role"],
-                qualia_desc=QUALIA_DESCRIPTIONS[rec["qualia_role"]],
-                sentence=rec["sentence"],
+    print(f"Loading model {config.NATURALIZE_MODEL} with transformers...")
+    tokenizer = AutoTokenizer.from_pretrained(config.NATURALIZE_MODEL)
+    model = AutoModelForCausalLM.from_pretrained(
+        config.NATURALIZE_MODEL,
+        torch_dtype=torch.float16,
+        device_map="auto",
+    )
+
+    results = []
+    for rec in tqdm(records, desc="Naturalizing"):
+        messages = build_chat_prompt(rec)
+        input_ids = tokenizer.apply_chat_template(messages, return_tensors="pt", add_generation_prompt=True)
+        input_ids = input_ids.to(model.device)
+
+        with torch.no_grad():
+            output_ids = model.generate(
+                input_ids,
+                max_new_tokens=config.NATURALIZE_MAX_TOKENS,
+                temperature=config.NATURALIZE_TEMPERATURE,
+                do_sample=True,
             )
-            try:
-                response = await client.messages.create(
-                    model=config.CLAUDE_MODEL,
-                    max_tokens=100,
-                    messages=[{"role": "user", "content": prompt}],
-                )
-                text = response.content[0].text.strip()
-                result = rec.copy()
-                result["naturalized"] = text
-                result["naturalize_status"] = "success"
-            except Exception as e:
-                result = rec.copy()
-                result["naturalized"] = rec["sentence"]
-                result["naturalize_status"] = f"error: {e}"
-            results[i] = result
 
-    tasks = [process_one(i, rec) for i, rec in enumerate(records)]
+        # Decode only the new tokens
+        new_tokens = output_ids[0][input_ids.shape[1]:]
+        text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+        text = text.split("\n")[0].strip().strip('"\'')
 
-    # Progress tracking
-    done = 0
-    total = len(tasks)
-    batch_size = 100
-    for start in range(0, total, batch_size):
-        batch = tasks[start:start + batch_size]
-        await asyncio.gather(*batch)
-        done += len(batch)
-        print(f"  Progress: {done}/{total}")
+        result = rec.copy()
+        result["naturalized"] = text
+        result["naturalize_status"] = "success"
+        results.append(result)
 
-    return [r for r in results if r is not None]
+    del model
+    torch.cuda.empty_cache()
+    return results
 
 
 def main():
-    # Load templated sentences
     input_path = config.STIMULI / "templates_raw.jsonl"
     if not input_path.exists():
         print(f"ERROR: Run 06_generate_templates.py first to generate {input_path}")
@@ -178,19 +161,19 @@ def main():
     else:
         existing = []
 
-    # Try batch API first, fall back to concurrent
-    use_batch = "--concurrent" not in sys.argv
+    # Try vLLM first (fast batched), fall back to transformers (slower)
+    use_transformers = "--transformers" in sys.argv
 
-    try:
-        if use_batch:
-            print("\nUsing Claude Batch API...")
-            client = anthropic.Anthropic()
-            results = run_batch(client, records)
-        else:
-            raise ValueError("User requested concurrent mode")
-    except Exception as e:
-        print(f"\nBatch API failed ({e}), falling back to async concurrent...")
-        results = asyncio.run(run_concurrent(records))
+    if use_transformers:
+        print("\nUsing transformers pipeline...")
+        results = naturalize_with_transformers(records)
+    else:
+        try:
+            print("\nUsing vLLM for batched inference...")
+            results = naturalize_with_vllm(records)
+        except Exception as e:
+            print(f"\nvLLM failed ({e}), falling back to transformers pipeline...")
+            results = naturalize_with_transformers(records)
 
     # Merge with existing results
     all_results = existing + results
@@ -198,13 +181,8 @@ def main():
     utils.write_jsonl(out_path, all_results)
     print(f"\nSaved {len(all_results)} naturalized sentences to {out_path}")
 
-    # Stats
     success = sum(1 for r in results if r.get("naturalize_status") == "success")
     print(f"  Success: {success}/{len(results)}")
-    if results:
-        failed = [r for r in results if r.get("naturalize_status") != "success"]
-        if failed:
-            print(f"  Failed: {len(failed)}")
 
 
 if __name__ == "__main__":
