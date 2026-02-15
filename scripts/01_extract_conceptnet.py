@@ -23,13 +23,17 @@ def load_seed_nouns() -> list[str]:
     """Load seed nouns from Brysbaert concreteness ratings + WordNet filter."""
     from nltk.corpus import wordnet as wn
 
-    csv_path = config.RAW / "brysbaert_concreteness.csv"
+    csv_path = config.RAW / "brysbaert_concreteness.tsv"
     if not csv_path.exists():
-        print(f"ERROR: Download Brysbaert concreteness ratings to {csv_path}")
-        print("Source: https://github.com/ArtsEngine/concreteness/raw/master/data/concrete.csv")
+        # Also check old .csv name for backwards compat
+        csv_path = config.RAW / "brysbaert_concreteness.csv"
+    if not csv_path.exists():
+        print(f"ERROR: Download Brysbaert concreteness ratings to {config.RAW / 'brysbaert_concreteness.tsv'}")
+        print("Source: https://raw.githubusercontent.com/ArtsEngine/concreteness/master/Concreteness_ratings_Brysbaert_et_al_BRM.txt")
         sys.exit(1)
 
-    df = pd.read_csv(csv_path)
+    # File is tab-delimited with columns: Word, Bigram, Conc.M, Conc.SD, ...
+    df = pd.read_csv(csv_path, sep="\t")
     word_col = [c for c in df.columns if c.lower().startswith("word")][0]
     conc_col = [c for c in df.columns if "conc" in c.lower() and ("m" in c.lower() or "mean" in c.lower())][0]
 

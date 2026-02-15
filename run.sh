@@ -50,13 +50,13 @@ except:
 "
 
 # Download Brysbaert concreteness ratings if not present
-if [ ! -f data/raw/brysbaert_concreteness.csv ]; then
+if [ ! -f data/raw/brysbaert_concreteness.tsv ]; then
     echo "  Downloading Brysbaert concreteness ratings..."
-    curl -L -o data/raw/brysbaert_concreteness.csv \
-        'https://github.com/ArtsEngine/concreteness/raw/master/data/concrete.csv' \
+    curl -L -o data/raw/brysbaert_concreteness.tsv \
+        'https://raw.githubusercontent.com/ArtsEngine/concreteness/master/Concreteness_ratings_Brysbaert_et_al_BRM.txt' \
         2>/dev/null || {
         echo "  ⚠ Could not download concreteness ratings automatically."
-        echo "    Please download manually to data/raw/brysbaert_concreteness.csv"
+        echo "    Please download manually to data/raw/brysbaert_concreteness.tsv"
     }
 fi
 
