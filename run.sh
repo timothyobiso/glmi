@@ -71,39 +71,29 @@ fi
 
 echo "  ✓ Setup complete"
 
-# ── Steps 1-3 + 5: Extraction (all fast with local data) ─────────────────────
+# ── Step 1: ConceptNet extraction (produces concrete_nouns.csv needed by 02/03/05)
 echo ""
-echo "▸ Steps 1-3: Extracting qualia from ConceptNet, WordNet, FrameNet"
+echo "▸ Step 1: Extracting qualia from ConceptNet (builds index on first run)"
+uv run python scripts/01_extract_conceptnet.py
+echo "  ✓ ConceptNet extraction complete"
 
-# ConceptNet (local dump — builds index on first run, ~3-5 min, then cached)
-uv run python scripts/01_extract_conceptnet.py &
-PID_CN=$!
+# ── Steps 2, 3, 5: Run in parallel (all depend on concrete_nouns.csv from step 1)
+echo ""
+echo "▸ Steps 2, 3, 5: WordNet, FrameNet, nonce words (parallel)"
 
-# WordNet and FrameNet in parallel (both fast)
 uv run python scripts/02_extract_wordnet.py &
 PID_WN=$!
 
 uv run python scripts/03_extract_bso.py &
 PID_BSO=$!
 
-# Nonce word generation in parallel (independent)
-echo ""
-echo "▸ Step 5: Generating nonce words (parallel with extraction)"
 uv run python scripts/05_generate_nonce_words.py &
 PID_NONCE=$!
 
 # Wait for all
-echo "  Waiting for WordNet..."
 wait $PID_WN && echo "  ✓ WordNet extraction complete" || echo "  ✗ WordNet extraction failed"
-
-echo "  Waiting for FrameNet..."
 wait $PID_BSO && echo "  ✓ FrameNet extraction complete" || echo "  ✗ FrameNet extraction failed"
-
-echo "  Waiting for nonce words..."
 wait $PID_NONCE && echo "  ✓ Nonce word generation complete" || echo "  ✗ Nonce word generation failed"
-
-echo "  Waiting for ConceptNet..."
-wait $PID_CN && echo "  ✓ ConceptNet extraction complete" || echo "  ✗ ConceptNet extraction failed"
 
 # ── Step 4: Merge ─────────────────────────────────────────────────────────────
 echo ""
