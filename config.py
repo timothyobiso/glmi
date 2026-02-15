@@ -38,7 +38,8 @@ RELATION_TO_QUALIA = {
 }
 
 # Relations that can serve as agentive fallback
-AGENTIVE_FALLBACK_RELATIONS = {"/r/MadeOf"}
+# (MadeOf is constitutive, not agentive — don't use it here)
+AGENTIVE_FALLBACK_RELATIONS: set[str] = set()
 
 # ── FrameNet frame → qualia mapping ───────────────────────────────────────────
 FRAME_TO_QUALIA = {

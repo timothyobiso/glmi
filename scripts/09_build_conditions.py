@@ -28,7 +28,7 @@ def get_nonce_token_indices(sentence: str, nonce_word: str) -> list[int]:
     """Find word-level indices of the nonce word in the sentence."""
     words = sentence.lower().split()
     nonce_lower = nonce_word.lower()
-    indices = [i for i, w in enumerate(words) if nonce_lower in w.strip(".,;:!?\"'()")]
+    indices = [i for i, w in enumerate(words) if w.strip(".,;:!?\"'()") == nonce_lower]
     return indices
 
 

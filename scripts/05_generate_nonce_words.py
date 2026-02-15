@@ -54,8 +54,12 @@ def generate_syllable() -> str:
 
 
 def generate_nonce_word() -> str:
-    """Generate a 1-2 syllable nonce word."""
-    n_syllables = random.choice([1, 1, 2, 2, 2])  # Bias toward 2 syllables
+    """Generate a 1-3 syllable nonce word.
+
+    Biases toward 2 syllables (sweet spot for 2-4 subword tokens).
+    3 syllables used occasionally to ensure enough candidates.
+    """
+    n_syllables = random.choice([1, 2, 2, 2, 2, 3])
     syllables = [generate_syllable() for _ in range(n_syllables)]
     word = "".join(syllables)
     return word
@@ -92,7 +96,7 @@ def main():
     validated = []
     seen = set()
     attempts = 0
-    max_attempts = target * 200  # generous budget
+    max_attempts = target * 500  # generous budget
 
     print(f"Generating {target} nonce words...")
     pbar = tqdm(total=target, desc="Valid nonce words")
@@ -102,7 +106,7 @@ def main():
         word = generate_nonce_word()
 
         # Basic filters
-        if len(word) < 3 or len(word) > 10:
+        if len(word) < 3 or len(word) > 12:
             continue
         if word in seen:
             continue

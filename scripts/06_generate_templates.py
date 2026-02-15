@@ -61,21 +61,31 @@ TEMPLATES = {
 }
 
 
+def _gerund(verb: str) -> str:
+    """Convert a single verb to its -ing form."""
+    if verb.endswith("ing"):
+        return verb
+    if verb.endswith("ie"):
+        return verb[:-2] + "ying"
+    if verb.endswith("e") and not verb.endswith("ee"):
+        return verb[:-1] + "ing"
+    # Double final consonant for CVC pattern (e.g., cut → cutting)
+    if (len(verb) >= 3
+        and verb[-1] in "bdgklmnprst"
+        and verb[-2] in "aeiou"
+        and verb[-3] not in "aeiou"):
+        return verb + verb[-1] + "ing"
+    return verb + "ing"
+
+
 def adjust_filler(filler: str, form: str) -> str:
     """Adjust filler morphologically based on required form."""
     filler = filler.strip().lower()
 
     if form == "gerund":
-        # Try to convert verb phrase to gerund
         words = filler.split()
         if words:
-            first = words[0]
-            if first.endswith("e") and not first.endswith("ee"):
-                words[0] = first[:-1] + "ing"
-            elif first.endswith("ing"):
-                pass  # already gerund
-            else:
-                words[0] = first + "ing"
+            words[0] = _gerund(words[0])
             return " ".join(words)
         return filler + "ing"
 
@@ -161,6 +171,10 @@ def main():
                 sorted_fillers = sorted(fillers, key=lambda f: f.get("weight", 0), reverse=True)
                 filler = sorted_fillers[0]
                 filler_text = filler["filler"]
+
+                # Skip fillers that are too long (would blow past word limit)
+                if len(filler_text.split()) > 8:
+                    continue
 
                 sentence = fill_template(tmpl, nonce, filler_text)
 

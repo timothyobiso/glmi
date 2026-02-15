@@ -64,6 +64,7 @@ def fill_agentive_gaps_local(concepts_missing_agentive: list[str]) -> dict[str, 
         from vllm import LLM, SamplingParams
     except ImportError:
         print("WARNING: vllm not available. Skipping agentive gap filling.")
+        print(f"  {len(concepts_missing_agentive)} concepts will be excluded from final dataset.")
         return {}
 
     print(f"\nFilling agentive gaps for {len(concepts_missing_agentive)} concepts using local model...")
