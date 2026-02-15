@@ -2,7 +2,7 @@
 """Layer-wise logistic regression probes.
 
 Trains probes at each layer to predict the target concept from nonce word
-representations. Tests whether qualia accumulation improves decodability.
+representations, for each experiment model.
 Stub — full implementation post-dataset.
 """
 
@@ -17,19 +17,22 @@ import config
 def train_probes(representations_dir: Path, output_dir: Path):
     """Train layer-wise logistic regression probes.
 
-    For each layer:
-    1. Train logistic regression to predict target concept from nonce word representation
-    2. Evaluate accuracy across conditions (more qualia = higher accuracy?)
-    3. Identify which layers encode concept identity most strongly
+    For each model in config.EXPERIMENT_MODELS:
+      For each layer:
+        1. Train logistic regression to predict target concept from nonce repr
+        2. Evaluate accuracy across conditions
+        3. Compare probe accuracy between models
 
     Args:
         representations_dir: Path to extracted representations
         output_dir: Directory for probe results
     """
-    # TODO: Split data into train/test
-    # TODO: Train sklearn LogisticRegression per layer
-    # TODO: Evaluate accuracy, F1, confusion matrices
-    # TODO: Plot accuracy by layer and condition
+    # TODO: For each model:
+    #   - Split data into train/test (stratified by concept)
+    #   - Train sklearn LogisticRegression per layer
+    #   - Evaluate accuracy, F1 by condition
+    #   - Plot accuracy by layer and condition, per model
+    #   - Compare cross-model probe transferability
     raise NotImplementedError("Full implementation post-dataset generation")
 
 

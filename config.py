@@ -91,5 +91,11 @@ NATURALIZE_MAX_TOKENS = 100
 NATURALIZE_BATCH_SIZE = 256  # vLLM batch size
 NATURALIZE_TEMPERATURE = 0.7
 
-# ── Llama tokenizer (for nonce word validation) ──────────────────────────────
-LLAMA_MODEL = "meta-llama/Llama-3.1-8B"
+# ── Experiment models (two families for cross-architecture comparison) ───────
+EXPERIMENT_MODELS = [
+    "meta-llama/Llama-3.1-8B",
+    "mistralai/Mistral-7B-v0.3",
+]
+
+# ── Discriminative evaluation ─────────────────────────────────────────────────
+N_DISTRACTORS = 10  # number of distractor concepts per stimulus

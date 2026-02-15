@@ -79,17 +79,19 @@ def main():
 
     exclude = english_words | name_set
 
-    # Load Llama tokenizer
-    print("Loading Llama tokenizer...")
-    try:
-        from transformers import AutoTokenizer
-        tokenizer = AutoTokenizer.from_pretrained(config.LLAMA_MODEL)
-        has_tokenizer = True
-        print("Llama tokenizer loaded.")
-    except Exception as e:
-        print(f"WARNING: Could not load Llama tokenizer ({e})")
-        print("Will skip tokenizer validation.")
-        has_tokenizer = False
+    # Load tokenizers for ALL experiment models
+    from transformers import AutoTokenizer
+
+    tokenizers = {}
+    for model_name in config.EXPERIMENT_MODELS:
+        try:
+            print(f"Loading tokenizer: {model_name}...")
+            tokenizers[model_name] = AutoTokenizer.from_pretrained(model_name)
+        except Exception as e:
+            print(f"WARNING: Could not load tokenizer for {model_name} ({e})")
+
+    if not tokenizers:
+        print("WARNING: No tokenizers loaded. Skipping tokenizer validation.")
 
     # Generate nonce words
     target = config.TARGET_NONCE_WORDS
@@ -117,19 +119,26 @@ def main():
 
         seen.add(word)
 
-        # Tokenizer check
-        if has_tokenizer:
-            tokens = tokenizer.encode(word, add_special_tokens=False)
-            n_tokens = len(tokens)
-            if n_tokens < config.MIN_NONCE_TOKENS or n_tokens > config.MAX_NONCE_TOKENS:
+        # Tokenizer check: must be 2-4 tokens in ALL experiment models
+        if tokenizers:
+            token_info = {}
+            valid_all = True
+            for model_name, tok in tokenizers.items():
+                tokens = tok.encode(word, add_special_tokens=False)
+                n_tokens = len(tokens)
+                if n_tokens < config.MIN_NONCE_TOKENS or n_tokens > config.MAX_NONCE_TOKENS:
+                    valid_all = False
+                    break
+                short_name = model_name.split("/")[-1]
+                token_info[short_name] = {
+                    "token_ids": tokens,
+                    "token_count": n_tokens,
+                    "token_strings": tok.convert_ids_to_tokens(tokens),
+                }
+            if not valid_all:
                 continue
-            token_info = {
-                "token_ids": tokens,
-                "token_count": n_tokens,
-                "token_strings": tokenizer.convert_ids_to_tokens(tokens),
-            }
         else:
-            token_info = {"token_ids": [], "token_count": -1, "token_strings": []}
+            token_info = {}
 
         validated.append({
             "nonce_word": word,
@@ -150,10 +159,13 @@ def main():
     utils.save_json(config.NONCE / "nonce_word_list.json", word_list)
 
     # Stats
-    if has_tokenizer:
-        token_counts = [v["token_count"] for v in validated]
-        print(f"Token count distribution: min={min(token_counts)}, max={max(token_counts)}, "
-              f"mean={sum(token_counts)/len(token_counts):.1f}")
+    if tokenizers and validated:
+        for model_name in config.EXPERIMENT_MODELS:
+            short_name = model_name.split("/")[-1]
+            token_counts = [v[short_name]["token_count"] for v in validated if short_name in v]
+            if token_counts:
+                print(f"  {short_name}: tokens min={min(token_counts)}, max={max(token_counts)}, "
+                      f"mean={sum(token_counts)/len(token_counts):.1f}")
 
 
 if __name__ == "__main__":
