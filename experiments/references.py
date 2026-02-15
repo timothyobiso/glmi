@@ -195,7 +195,7 @@ def main():
         sys.exit(1)
 
     ontology = utils.load_json(ontology_path)
-    concepts = sorted(ontology.keys())
+    concepts = sorted(ontology["concepts"].keys())
     print(f"Loaded {len(concepts)} concepts")
 
     models = config.EXPERIMENT_MODELS
