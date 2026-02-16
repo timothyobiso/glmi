@@ -91,10 +91,17 @@ NATURALIZE_MAX_TOKENS = 100
 NATURALIZE_BATCH_SIZE = 256  # vLLM batch size
 NATURALIZE_TEMPERATURE = 0.7
 
-# ── Experiment models (two families for cross-architecture comparison) ───────
+# ── Experiment models ────────────────────────────────────────────────────────
+# 4 architecture families, Qwen at 4 scales for scaling analysis
 EXPERIMENT_MODELS = [
     "meta-llama/Llama-3.1-8B",
+    "meta-llama/Llama-3.1-70B",
     "mistralai/Mistral-7B-v0.3",
+    "google/gemma-2-9b",
+    "Qwen/Qwen3-4B",
+    "Qwen/Qwen3-8B",
+    "Qwen/Qwen3-14B",
+    "Qwen/Qwen3-32B",
 ]
 
 # ── Discriminative evaluation ─────────────────────────────────────────────────

@@ -34,6 +34,10 @@ echo "============================================"
 echo "GL-Qualia Experiment Pipeline"
 echo "============================================"
 echo ""
+echo "Models: meta-llama/Llama-3.1-8B, meta-llama/Llama-3.1-70B,"
+echo "        mistralai/Mistral-7B-v0.3, google/gemma-2-9b, Qwen/Qwen3-8B"
+echo "Use --model <substring> to run a specific model"
+echo ""
 
 # Step 1: Extract reference representations
 if [ "$SKIP_EXTRACT" = false ]; then
