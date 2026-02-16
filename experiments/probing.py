@@ -94,7 +94,7 @@ def probe_qualia_role(
 
     fold_accs = []
     for train_idx, test_idx in gkf.split(X, y, groups):
-        clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs", n_jobs=-1)
+        clf = LogisticRegression(max_iter=1000, C=1.0, solver="lbfgs")
         clf.fit(X[train_idx], y[train_idx])
         fold_accs.append(clf.score(X[test_idx], y[test_idx]))
 
